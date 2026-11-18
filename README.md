@@ -1,7 +1,7 @@
 
 # TENTIFY – Custom Tent Configurator
 
-An interactive 3D promotional tent configurator built with React, TypeScript, Three.js, and Vite.
+An interactive 3D promotional tent configurator built with React, TypeScript, Three.js, React Three Fiber, and Vite.
 
 Live Demo: https://tent-configurator-seven.vercel.app/
 
@@ -24,12 +24,15 @@ The application uses a reusable configuration structure and separates UI compone
 ## 2. Features
 
 ### 3D Product Configurator
+
 - Interactive 3D tent preview.
 - Rotate, zoom, and inspect the tent.
 - GLB-based 3D product models.
 - Multiple tent size options.
+- Real-time panel color updates.
 
 ### Product Customization
+
 - Independently customize roof, front, back, left, and right panels.
 - Select different fabric colors.
 - Apply one color to all panels.
@@ -39,19 +42,22 @@ The application uses a reusable configuration structure and separates UI compone
 - Adjust logo and text positioning.
 
 ### 2D Artwork Editor
-- Canvas-based artwork editor.
+
+- Canvas-based artwork editor using the HTML Canvas API.
 - Logo upload and removal.
 - Custom text editing.
 - Drag-and-drop artwork positioning.
 - Live artwork updates.
 
 ### Configuration Management
+
 - Structured TypeScript configuration data.
 - Save configurations using browser localStorage.
 - Load previously saved configurations.
 - Store product selections, panel colors, and artwork details.
 
 ### Dynamic Pricing
+
 - Pricing calculation through a dedicated service.
 - Different base prices for tent sizes.
 - Additional panel customization charges.
@@ -60,27 +66,32 @@ The application uses a reusable configuration structure and separates UI compone
 - Centralized price breakdown.
 
 ### Shopping Cart
+
 - Local mock shopping cart.
 - Add customized products to cart.
 - Store selected product options and configuration details.
 - Calculate cart totals.
-- Remove cart items through cart clearing.
+- Clear the mock cart.
 
 ### PDF Export
+
 - Generate a PDF configuration summary.
 - Include product details and tent size.
 - Include panel color selections.
 - Include artwork details.
-- Include pricing breakdown and final price.
+- Include pricing breakdown and final estimated price.
+- Include an optional 3D preview image when available.
 
 ### Responsive Design
+
 - Desktop layout.
 - Tablet layout.
 - Mobile-friendly interface.
 
 ### iframe Embedding
+
 - Hosted configurator can be embedded into another website using an iframe.
-- Responsive iframe example included below.
+- Responsive iframe example provided below.
 
 ---
 
@@ -94,7 +105,7 @@ The application uses a reusable configuration structure and separates UI compone
 | Three.js | 3D rendering |
 | React Three Fiber | React integration for Three.js |
 | React Three Drei | 3D helpers and controls |
-| Fabric.js | Canvas editing dependency |
+| HTML Canvas API | 2D artwork editing |
 | jsPDF | PDF generation |
 | CSS | Styling and responsive layout |
 | localStorage | Local configuration and mock cart storage |
@@ -151,19 +162,23 @@ tent-configurator/
 ### Architecture Responsibilities
 
 Components
+
 - `Viewer3D.tsx`: Loads and displays the 3D tent model and applies panel colors and artwork.
 - `ArtworkEditor.tsx`: Provides the 2D artwork editing interface.
 
 Services
+
 - `configurationService.ts`: Saves and loads configuration data.
 - `pricingService.ts`: Calculates product and customization pricing.
 - `shopifyService.ts`: Handles the mock shopping cart and cart configuration.
 - `pdfService.ts`: Generates configuration summary PDFs.
 
 Types
+
 - `configurator.ts`: Defines reusable TypeScript interfaces and configuration types.
 
 Application
+
 - `App.tsx`: Coordinates configuration state, components, pricing, cart, and application actions.
 
 ---
@@ -229,7 +244,7 @@ The application stores product customization as structured data.
 Example:
 
 ```ts
-type PanelColors = {
+export type PanelColors = {
   roof: string;
   front: string;
   back: string;
@@ -237,7 +252,7 @@ type PanelColors = {
   right: string;
 };
 
-type ArtworkDesign = {
+export type ArtworkDesign = {
   logo: string | null;
   text: string;
   textColor: string;
@@ -247,7 +262,7 @@ type ArtworkDesign = {
   textY: number;
 };
 
-type TentConfiguration = {
+export type TentConfiguration = {
   productId: string;
   productName: string;
   size: string;
@@ -275,6 +290,8 @@ The demo pricing calculation considers:
 
 The service returns a structured price breakdown.
 
+Note: Pricing values are demonstration estimates and should be replaced with actual supplier or business pricing before production use.
+
 ### Mock Shopify Integration
 
 The project includes a local mock shopping cart implementation.
@@ -287,7 +304,7 @@ It demonstrates:
 - Configuration properties associated with cart items.
 - Cart quantity and total price calculations.
 
-Important: The current implementation is a demonstration using browser localStorage. It does not create a real Shopify order or initiate Shopify checkout.
+Important: The current implementation uses browser localStorage. It does not create a real Shopify order or initiate Shopify checkout.
 
 A production integration would connect the pricing and cart services to Shopify's actual cart and checkout APIs.
 
@@ -331,7 +348,7 @@ Example:
 
 ### iframe Demo
 
-A separate embedding demonstration is available in:
+A separate embedding demonstration can be maintained in:
 
 ```text
 embed-demo/index.html
@@ -349,7 +366,7 @@ Live Application:
 
 https://tent-configurator-seven.vercel.app/
 
-Deployment Configuration:
+### Deployment Configuration
 
 | Setting | Value |
 |---|---|
@@ -373,6 +390,7 @@ Vercel can automatically deploy future updates when changes are pushed to the co
 - Automated testing.
 - Performance optimization and code splitting.
 - Production order and CRM integration.
+- Store generated PDF summaries with customer orders.
 
 ---
 
@@ -400,3 +418,4 @@ GitHub: https://github.com/kishan-kumar-dev/tent-configurator
 Live Demo: https://tent-configurator-seven.vercel.app/
 
 ---
+```

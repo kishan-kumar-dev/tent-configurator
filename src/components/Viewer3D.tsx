@@ -1,10 +1,13 @@
-import { Suspense, useMemo } from "react";
+
+import { Suspense, useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
-
 import { Canvas } from "@react-three/fiber";
-import { Center, Environment, OrbitControls, useGLTF } from "@react-three/drei";
+import { Center, OrbitControls, useGLTF } from "@react-three/drei";
 
-import type { ArtworkDesign, PanelColors } from "../types/configurator";
+import type {
+  ArtworkDesign,
+  PanelColors,
+} from "../types/configurator";
 
 type Viewer3DProps = {
   modelPath: string;
@@ -12,323 +15,341 @@ type Viewer3DProps = {
   artwork: ArtworkDesign;
 };
 
-// Three.js geometry group information.
-type GeometryGroupInfo = {
-  start: number;
-  count: number;
-  materialIndex?: number;
-};
+// ---------------------------------------------
+// FABRIC DETECTION
+// ---------------------------------------------
 
-// Check whether a material belongs to the tent fabric.
 function isFabricMaterial(material: THREE.Material): boolean {
-  return material.name.toLowerCase().includes("fabric");
+  const name = material.name.toLowerCase();
+
+  return (
+    name.includes("fabric") ||
+    name.includes("cloth") ||
+    name.includes("roof") ||
+    name.includes("canopy") ||
+    name.includes("tent")
+  );
 }
 
-// Check whether a mesh belongs to the fabric.
 function isFabricMesh(mesh: THREE.Mesh): boolean {
-  const meshName = mesh.name.toLowerCase();
+  const name = mesh.name.toLowerCase();
 
   const materials = Array.isArray(mesh.material)
     ? mesh.material
     : [mesh.material];
 
   return (
-    meshName.includes("fabric") ||
-    materials.some((material) => isFabricMaterial(material))
+    name.includes("fabric") ||
+    name.includes("cloth") ||
+    name.includes("roof") ||
+    name.includes("canopy") ||
+    name.includes("tent") ||
+    materials.some(isFabricMaterial)
   );
 }
 
-// Calculate the bounding box using fabric meshes only.
-function getFabricBounds(scene: THREE.Object3D): THREE.Box3 {
-  const bounds = new THREE.Box3();
-  let foundFabric = false;
+// ---------------------------------------------
+// SCENE BOUNDS
+// ---------------------------------------------
 
+function getSceneBounds(scene: THREE.Object3D): THREE.Box3 {
   scene.updateMatrixWorld(true);
-
-  scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) return;
-    if (!isFabricMesh(object)) return;
-
-    const meshBounds = new THREE.Box3().setFromObject(object);
-
-    if (!foundFabric) {
-      bounds.copy(meshBounds);
-      foundFabric = true;
-    } else {
-      bounds.union(meshBounds);
-    }
-  });
-
-  if (!foundFabric) {
-    bounds.setFromObject(scene);
-  }
-
-  return bounds;
+  return new THREE.Box3().setFromObject(scene);
 }
 
-// Identify which tent panel a triangle belongs to.
-function getPanelColor(
-  center: THREE.Vector3,
+// ---------------------------------------------
+// PANEL COLOR DETECTION
+// ---------------------------------------------
+
+function getTrianglePanelColor(
   normal: THREE.Vector3,
+  center: THREE.Vector3,
   bounds: THREE.Box3,
   colors: PanelColors,
 ): string {
   const size = new THREE.Vector3();
+
   bounds.getSize(size);
 
-  const roofThreshold = bounds.min.y + size.y * 0.68;
+  const roofThreshold = bounds.max.y - size.y * 0.38;
 
   // Roof.
-  if (center.y >= roofThreshold && Math.abs(normal.y) > 0.3) {
+  if (center.y >= roofThreshold && Math.abs(normal.y) > 0.35) {
     return colors.roof;
   }
 
-  // Identify the main direction of the surface.
+  // Front and back.
   if (Math.abs(normal.z) >= Math.abs(normal.x)) {
     return normal.z >= 0 ? colors.front : colors.back;
   }
 
+  // Left and right.
   return normal.x >= 0 ? colors.right : colors.left;
 }
 
-// Create cloned materials without changing the original GLB materials.
-function cloneMaterials(
-  materials: THREE.Material[],
-  meshIsFabric: boolean,
-): THREE.Material[] {
-  return materials.map((material) => {
-    const clonedMaterial = material.clone();
+// ---------------------------------------------
+// CREATE COLORED SCENE
+// ---------------------------------------------
 
-    if (meshIsFabric || isFabricMaterial(material)) {
-      const fabricMaterial = clonedMaterial as THREE.MeshStandardMaterial;
-
-      fabricMaterial.map = null;
-      fabricMaterial.emissiveMap = null;
-      fabricMaterial.color.set("#ffffff");
-      fabricMaterial.vertexColors = true;
-    }
-
-    return clonedMaterial;
-  });
-}
-
-// Create a colored copy of the tent scene.
 function createColoredScene(
   originalScene: THREE.Object3D,
-  panelColors: PanelColors,
-): THREE.Group {
-  const clonedScene = originalScene.clone(true);
+  colors: PanelColors,
+): THREE.Object3D {
+  const scene = originalScene.clone(true);
 
-  clonedScene.updateMatrixWorld(true);
+  scene.updateMatrixWorld(true);
 
-  const fabricBounds = getFabricBounds(clonedScene);
+  const bounds = getSceneBounds(scene);
 
-  clonedScene.traverse((object) => {
+  scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
 
-    const mesh = object;
-    const meshIsFabric = isFabricMesh(mesh);
+    if (!isFabricMesh(object)) return;
 
-    if (!meshIsFabric) return;
+    const geometry = object.geometry.index
+      ? object.geometry.toNonIndexed()
+      : object.geometry.clone();
 
-    // Clone geometry so the original GLB remains unchanged.
-    const geometry = mesh.geometry.clone();
+    const position = geometry.getAttribute("position");
 
-    // Convert indexed geometry into individual triangles.
-    const nonIndexedGeometry = geometry.index
-      ? geometry.toNonIndexed()
-      : geometry;
-
-    if (geometry !== nonIndexedGeometry) {
+    if (!position) {
       geometry.dispose();
+      return;
     }
 
-    mesh.geometry = nonIndexedGeometry;
+    const colorArray = new Float32Array(position.count * 3);
 
-    const positionAttribute = nonIndexedGeometry.getAttribute("position");
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
 
-    const colors = new Float32Array(positionAttribute.count * 3);
+    const edge1 = new THREE.Vector3();
+    const edge2 = new THREE.Vector3();
 
-    const groups = nonIndexedGeometry.groups as GeometryGroupInfo[];
-
-    const materials = Array.isArray(mesh.material)
-      ? mesh.material
-      : [mesh.material];
-
-    const worldA = new THREE.Vector3();
-    const worldB = new THREE.Vector3();
-    const worldC = new THREE.Vector3();
-
-    const center = new THREE.Vector3();
-    const edgeA = new THREE.Vector3();
-    const edgeB = new THREE.Vector3();
     const normal = new THREE.Vector3();
+    const center = new THREE.Vector3();
 
-    const vertexColor = new THREE.Color();
+    const worldCenter = new THREE.Vector3();
+    const worldNormal = new THREE.Vector3();
 
-    // Process every triangle.
-    for (
-      let vertexIndex = 0;
-      vertexIndex < positionAttribute.count;
-      vertexIndex += 3
-    ) {
-      const group = groups.find(
-        (item: GeometryGroupInfo) =>
-          vertexIndex >= item.start && vertexIndex < item.start + item.count,
-      );
+    const parsedColor = new THREE.Color();
 
-      const materialIndex = group?.materialIndex ?? 0;
-      const triangleMaterial = materials[materialIndex];
+    for (let index = 0; index + 2 < position.count; index += 3) {
+      a.fromBufferAttribute(position, index);
+      b.fromBufferAttribute(position, index + 1);
+      c.fromBufferAttribute(position, index + 2);
 
-      const triangleIsFabric =
-        meshIsFabric ||
-        (triangleMaterial ? isFabricMaterial(triangleMaterial) : false);
+      edge1.subVectors(b, a);
+      edge2.subVectors(c, a);
 
-      // Get triangle world coordinates.
-      worldA.fromBufferAttribute(positionAttribute, vertexIndex);
-      worldB.fromBufferAttribute(positionAttribute, vertexIndex + 1);
-      worldC.fromBufferAttribute(positionAttribute, vertexIndex + 2);
+      normal.crossVectors(edge1, edge2).normalize();
 
-      worldA.applyMatrix4(mesh.matrixWorld);
-      worldB.applyMatrix4(mesh.matrixWorld);
-      worldC.applyMatrix4(mesh.matrixWorld);
-
-      // Calculate triangle center.
       center
-        .copy(worldA)
-        .add(worldB)
-        .add(worldC)
+        .copy(a)
+        .add(b)
+        .add(c)
         .multiplyScalar(1 / 3);
 
-      // Calculate triangle normal in world space.
-      edgeA.subVectors(worldB, worldA);
-      edgeB.subVectors(worldC, worldA);
+      worldCenter.copy(center);
 
-      normal.crossVectors(edgeA, edgeB).normalize();
+      object.localToWorld(worldCenter);
 
-      // Determine the correct panel color.
-      const panelColor = triangleIsFabric
-        ? getPanelColor(center, normal, fabricBounds, panelColors)
-        : "#ffffff";
+      worldNormal
+        .copy(normal)
+        .transformDirection(object.matrixWorld);
 
-      vertexColor.set(panelColor);
+      const panelColor = getTrianglePanelColor(
+        worldNormal,
+        worldCenter,
+        bounds,
+        colors,
+      );
 
-      // Apply the same color to all three triangle vertices.
-      for (let offset = 0; offset < 3; offset++) {
-        const index = (vertexIndex + offset) * 3;
+      parsedColor.set(panelColor);
 
-        colors[index] = vertexColor.r;
-        colors[index + 1] = vertexColor.g;
-        colors[index + 2] = vertexColor.b;
+      for (let vertex = 0; vertex < 3; vertex++) {
+        const offset = (index + vertex) * 3;
+
+        colorArray[offset] = parsedColor.r;
+        colorArray[offset + 1] = parsedColor.g;
+        colorArray[offset + 2] = parsedColor.b;
       }
     }
 
-    nonIndexedGeometry.setAttribute(
+    geometry.setAttribute(
       "color",
-      new THREE.Float32BufferAttribute(colors, 3),
+      new THREE.BufferAttribute(colorArray, 3),
     );
 
-    // Clone materials to avoid modifying the cached GLB.
-    const clonedMaterials = cloneMaterials(materials, meshIsFabric);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
 
-    mesh.material = Array.isArray(mesh.material)
+    const originalMaterials = Array.isArray(object.material)
+      ? object.material
+      : [object.material];
+
+    const clonedMaterials = originalMaterials.map((material) => {
+      const cloned = material.clone();
+
+      if (isFabricMaterial(material)) {
+        if (
+          cloned instanceof THREE.MeshStandardMaterial ||
+          cloned instanceof THREE.MeshPhysicalMaterial
+        ) {
+          // Remove the original color texture.
+          cloned.map = null;
+
+          // Use a white base so selected colors display correctly.
+          cloned.color.set("#FFFFFF");
+
+          // Enable custom triangle colors.
+          cloned.vertexColors = true;
+
+          cloned.side = THREE.DoubleSide;
+          cloned.roughness = 0.85;
+          cloned.metalness = 0;
+          cloned.transparent = false;
+          cloned.opacity = 1;
+          cloned.needsUpdate = true;
+        } else if (
+          cloned instanceof THREE.MeshPhongMaterial ||
+          cloned instanceof THREE.MeshLambertMaterial
+        ) {
+          cloned.map = null;
+          cloned.color.set("#FFFFFF");
+          cloned.vertexColors = true;
+          cloned.side = THREE.DoubleSide;
+          cloned.transparent = false;
+          cloned.opacity = 1;
+          cloned.needsUpdate = true;
+        }
+      }
+
+      return cloned;
+    });
+
+    object.geometry = geometry;
+
+    object.material = Array.isArray(object.material)
       ? clonedMaterials
       : clonedMaterials[0];
+
+    object.visible = true;
   });
 
-  return clonedScene as THREE.Group;
+  scene.updateMatrixWorld(true);
+
+  return scene;
 }
 
-// Generate the logo and text artwork texture.
-function createArtworkTexture(design: ArtworkDesign): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
+// ---------------------------------------------
+// ARTWORK OVERLAY
+// ---------------------------------------------
 
-  canvas.width = 600;
-  canvas.height = 360;
+function ArtworkOverlay({
+  artwork,
+}: {
+  artwork: ArtworkDesign;
+}) {
+  const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null);
 
-  const context = canvas.getContext("2d");
+  useEffect(() => {
+    const canvas = document.createElement("canvas");
 
-  if (!context) {
-    return new THREE.CanvasTexture(canvas);
-  }
+    canvas.width = 600;
+    canvas.height = 360;
 
-  context.clearRect(0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext("2d");
 
-  // Draw uploaded logo.
-  if (design.logo) {
-    const image = new Image();
+    if (!context) return;
 
-    image.onload = () => {
-      const maxWidth = 190;
-      const maxHeight = 125;
+    let image: HTMLImageElement | null = null;
 
-      const scale = Math.min(
-        maxWidth / image.width,
-        maxHeight / image.height,
-        1,
-      );
+    const newTexture = new THREE.CanvasTexture(canvas);
 
-      const width = image.width * scale;
-      const height = image.height * scale;
+    newTexture.colorSpace = THREE.SRGBColorSpace;
 
-      const x = (design.logoX / 100) * canvas.width;
-      const y = (design.logoY / 100) * canvas.height;
+    const drawArtwork = () => {
+      context.clearRect(0, 0, 600, 360);
 
-      context.drawImage(image, x - width / 2, y - height / 2, width, height);
+      // Logo.
+      if (image?.complete && image.naturalWidth > 0) {
+        const maxWidth = 150;
+        const maxHeight = 100;
 
-      texture.needsUpdate = true;
+        const scale = Math.min(
+          maxWidth / image.naturalWidth,
+          maxHeight / image.naturalHeight,
+          1,
+        );
+
+        const width = image.naturalWidth * scale;
+        const height = image.naturalHeight * scale;
+
+        const x = (artwork.logoX / 100) * 600 - width / 2;
+        const y = (artwork.logoY / 100) * 360 - height / 2;
+
+        context.drawImage(image, x, y, width, height);
+      }
+
+      // Text.
+      if (artwork.text.trim()) {
+        context.save();
+
+        context.fillStyle = artwork.textColor || "#222222";
+        context.font = "bold 30px Arial";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+
+        context.fillText(
+          artwork.text.slice(0, 40),
+          (artwork.textX / 100) * 600,
+          (artwork.textY / 100) * 360,
+          560,
+        );
+
+        context.restore();
+      }
+
+      newTexture.needsUpdate = true;
     };
 
-    image.src = design.logo;
-  }
+    if (artwork.logo) {
+      image = new Image();
 
-  // Draw custom text.
-  if (design.text.trim()) {
-    context.font = "bold 30px Arial";
-    context.fillStyle = design.textColor;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
+      image.onload = drawArtwork;
+      image.onerror = drawArtwork;
 
-    context.fillText(
-      design.text,
-      (design.textX / 100) * canvas.width,
-      (design.textY / 100) * canvas.height,
-      550,
-    );
-  }
+      image.src = artwork.logo;
+    }
 
-  const texture = new THREE.CanvasTexture(canvas);
+    drawArtwork();
 
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
+    setTexture(newTexture);
 
-  return texture;
-}
+    return () => {
+      if (image) {
+        image.onload = null;
+        image.onerror = null;
+      }
 
-// 3D tent model.
-function TentModel({
-  modelPath,
-  panelColors,
-}: {
-  modelPath: string;
-  panelColors: PanelColors;
-}) {
-  const { scene } = useGLTF(modelPath);
+      newTexture.dispose();
+    };
+  }, [
+    artwork.logo,
+    artwork.text,
+    artwork.textColor,
+    artwork.logoX,
+    artwork.logoY,
+    artwork.textX,
+    artwork.textY,
+  ]);
 
-  const coloredScene = useMemo(
-    () => createColoredScene(scene, panelColors),
-    [scene, panelColors],
-  );
-
-  return <primitive object={coloredScene} />;
-}
-
-// 3D artwork overlay.
-function ArtworkOverlay({ artwork }: { artwork: ArtworkDesign }) {
-  const texture = useMemo(() => createArtworkTexture(artwork), [artwork]);
+  if (!texture) return null;
 
   return (
-    <mesh position={[0, 1.05, 0.765]} renderOrder={10}>
+    <mesh position={[0, 1.05, 0.765]} renderOrder={2}>
       <planeGeometry args={[1.35, 0.81]} />
 
       <meshBasicMaterial
@@ -341,63 +362,96 @@ function ArtworkOverlay({ artwork }: { artwork: ArtworkDesign }) {
   );
 }
 
-// Main viewer component.
-export default function Viewer3D({
+// ---------------------------------------------
+// TENT MODEL
+// ---------------------------------------------
+
+function TentModel({
+  modelPath,
+  panelColors,
+  artwork,
+}: Viewer3DProps) {
+  const { scene } = useGLTF(modelPath);
+
+  const coloredScene = useMemo(
+    () => createColoredScene(scene, panelColors),
+    [scene, panelColors],
+  );
+
+  return (
+    <>
+      <primitive object={coloredScene} />
+
+      <ArtworkOverlay artwork={artwork} />
+    </>
+  );
+}
+
+// ---------------------------------------------
+// MAIN VIEWER
+// ---------------------------------------------
+
+function Viewer3D({
   modelPath,
   panelColors,
   artwork,
 }: Viewer3DProps) {
   return (
-    <div
-      className="viewer-3d"
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: "420px",
+    <Canvas
+      camera={{
+        position: [3.8, 3.0, 4.8],
+        fov: 38,
       }}
+      gl={{
+        antialias: true,
+        preserveDrawingBuffer: true,
+      }}
+      dpr={[1, 1.5]}
+      shadows="percentage"
     >
-      <Canvas
-        camera={{
-          position: [3.4, 2.5, 4.2],
-          fov: 38,
-        }}
-        dpr={[1, 2]}
-        gl={{
-          antialias: true,
-          alpha: true,
-        }}
-      >
-        <color attach="background" args={["#f5f6f8"]} />
+      <color attach="background" args={["#F5F6F8"]} />
 
-        <ambientLight intensity={1.1} />
+      <ambientLight intensity={1.5} />
 
-        <directionalLight position={[5, 8, 5]} intensity={2} />
+      <directionalLight
+        position={[5, 8, 5]}
+        intensity={2.5}
+        castShadow
+      />
 
-        <directionalLight position={[-5, 4, -5]} intensity={0.8} />
+      <directionalLight
+        position={[-5, 5, -5]}
+        intensity={1}
+      />
 
-        <Suspense fallback={null}>
-          <Center>
-            <TentModel modelPath={modelPath} panelColors={panelColors} />
+      <directionalLight
+        position={[0, 5, 0]}
+        intensity={0.7}
+      />
 
-            <ArtworkOverlay artwork={artwork} />
-          </Center>
+      <Suspense fallback={null}>
+        <Center>
+          <TentModel
+            modelPath={modelPath}
+            panelColors={panelColors}
+            artwork={artwork}
+          />
+        </Center>
+      </Suspense>
 
-          <Environment preset="city" />
-        </Suspense>
-
-        <OrbitControls
-          makeDefault
-          enablePan
-          enableZoom
-          enableRotate
-          minDistance={2}
-          maxDistance={10}
-          minPolarAngle={0.2}
-          maxPolarAngle={Math.PI / 2}
-          dampingFactor={0.08}
-          enableDamping
-        />
-      </Canvas>
-    </div>
+      <OrbitControls
+        makeDefault
+        enablePan
+        enableZoom
+        enableRotate
+        enableDamping
+        minDistance={2}
+        maxDistance={12}
+        maxPolarAngle={Math.PI * 0.49}
+        target={[0, 1, 0]}
+      />
+    </Canvas>
   );
 }
+
+export default Viewer3D;

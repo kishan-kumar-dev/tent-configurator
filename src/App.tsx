@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
-import Viewer3D from "./components/Viewer3D";
 import ArtworkEditor from "./components/ArtworkEditor";
-
 import "./App.css";
 
 import type {
@@ -27,32 +25,28 @@ import {
 
 import { generateConfigurationPDF } from "./services/pdfService";
 
-/* -----------------------------------------
-   TENT SIZES
------------------------------------------ */
+const Viewer3D = lazy(() => import("./components/Viewer3D"));
 
+// Available tent sizes.
 const tentSizes = [
   {
-    id: "5x5",
-    name: "5 × 5",
-    model: "/models/Tent_5_5.glb",
+    size: "5x5",
+    label: "5 × 5 ft",
+    modelPath: "/models/Tent_5_5.glb",
   },
   {
-    id: "6.5x6.5",
-    name: "6.5 × 6.5",
-    model: "/models/Tent_6_5.glb",
+    size: "6.5x6.5",
+    label: "6.5 × 6.5 ft",
+    modelPath: "/models/Tent_6_5.glb",
   },
   {
-    id: "8x8",
-    name: "8 × 8",
-    model: "/models/Tent_8_8.glb",
+    size: "8x8",
+    label: "8 × 8 ft",
+    modelPath: "/models/Tent_8_8.glb",
   },
 ];
 
-/* -----------------------------------------
-   FABRIC COLORS
------------------------------------------ */
-
+// Available fabric colors.
 const fabricColors = [
   { name: "White", value: "#FFFFFF" },
   { name: "Red", value: "#E53935" },
@@ -62,44 +56,19 @@ const fabricColors = [
   { name: "Yellow", value: "#FDD835" },
 ];
 
-/* -----------------------------------------
-   CUSTOMIZATION SECTIONS
------------------------------------------ */
-
+// Configurator sections.
 const sections = [
-  { id: "roof", name: "Roof Design" },
-  { id: "front", name: "Front Panel" },
-  { id: "back", name: "Back Panel" },
-  { id: "left", name: "Left Panel" },
-  { id: "right", name: "Right Panel" },
-  { id: "artwork", name: "Logo & Artwork" },
+  { id: "roof", label: "Roof Design" },
+  { id: "front", label: "Front Panel" },
+  { id: "back", label: "Back Panel" },
+  { id: "left", label: "Left Panel" },
+  { id: "right", label: "Right Panel" },
+  { id: "artwork", label: "Logo & Artwork" },
 ] as const;
 
 type SectionId = (typeof sections)[number]["id"];
 
-const EMPTY_CART: ShopifyMockCart = {
-  items: [],
-  totalQuantity: 0,
-  totalPrice: 0,
-  currency: "INR",
-};
-
-/* -----------------------------------------
-   DEFAULT PANEL COLORS
------------------------------------------ */
-
-const defaultPanelColors: PanelColors = {
-  roof: "#FFFFFF",
-  front: "#FFFFFF",
-  back: "#FFFFFF",
-  left: "#FFFFFF",
-  right: "#FFFFFF",
-};
-
-/* -----------------------------------------
-   DEFAULT ARTWORK
------------------------------------------ */
-
+// Default artwork.
 const defaultArtwork: ArtworkDesign = {
   logo: null,
   text: "YOUR BRAND",
@@ -110,10 +79,16 @@ const defaultArtwork: ArtworkDesign = {
   textY: 75,
 };
 
-/* -----------------------------------------
-   DEFAULT CONFIGURATION
------------------------------------------ */
+// Default panel colors.
+const defaultPanelColors: PanelColors = {
+  roof: "#FFFFFF",
+  front: "#FFFFFF",
+  back: "#FFFFFF",
+  left: "#FFFFFF",
+  right: "#FFFFFF",
+};
 
+// Default configuration.
 const defaultConfiguration: TentConfiguration = {
   productId: "tentify-custom-canopy",
   productName: "Custom Canopy Tent",
@@ -122,10 +97,15 @@ const defaultConfiguration: TentConfiguration = {
   artwork: defaultArtwork,
 };
 
-/* -----------------------------------------
-   INITIAL CONFIGURATION
------------------------------------------ */
+// Empty demo cart.
+const EMPTY_CART: ShopifyMockCart = {
+  items: [],
+  totalQuantity: 0,
+  totalPrice: 0,
+  currency: "INR",
+};
 
+// Load initial configuration.
 function getInitialConfiguration(): TentConfiguration {
   try {
     const saved = loadConfiguration();
@@ -148,28 +128,28 @@ function getInitialConfiguration(): TentConfiguration {
     };
   } catch (error) {
     console.error("Unable to load configuration:", error);
-
     return defaultConfiguration;
   }
 }
 
-/* -----------------------------------------
-   INITIAL CART
------------------------------------------ */
-
+// Load initial cart.
 function getInitialCart(): ShopifyMockCart {
   try {
     return getMockCart();
   } catch (error) {
     console.error("Unable to load cart:", error);
-
     return EMPTY_CART;
   }
 }
 
-/* =========================================
-   MAIN APP
-========================================= */
+// Format price in Indian Rupees.
+function formatPrice(value: number): string {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
 
 function App() {
   const [configuration, setConfiguration] = useState<TentConfiguration>(
@@ -190,23 +170,52 @@ function App() {
 
   const [pricingError, setPricingError] = useState("");
 
-  /* -----------------------------------------
-     CONFIGURATION VALUES
-  ----------------------------------------- */
+  // Reference to the 3D preview container.
+  const previewContainerRef = useRef<HTMLDivElement>(null);
 
-  const panelColors = configuration.panelColors;
+  // Get selected tent model.
+  const selectedTent = useMemo(
+    () =>
+      tentSizes.find((tent) => tent.size === configuration.size) ??
+      tentSizes[0],
+    [configuration.size],
+  );
 
-  const artwork = configuration.artwork;
+  // =========================================
+  // ASYNCHRONOUS PRICING CALCULATION
+  // =========================================
 
-  const selectedTent = useMemo(() => {
-    return (
-      tentSizes.find((tent) => tent.id === configuration.size) ?? tentSizes[0]
-    );
-  }, [configuration.size]);
+  useEffect(() => {
+    let active = true;
 
-  /* -----------------------------------------
-     UPDATE PANEL COLOR
-  ----------------------------------------- */
+    const calculatePricing = async () => {
+      try {
+        const result = await getTentPricing(configuration);
+
+        if (active) {
+          setPricing(result);
+          setPricingError("");
+        }
+      } catch (error) {
+        console.error("Pricing calculation failed:", error);
+
+        if (active) {
+          setPricing(null);
+          setPricingError("Unable to calculate pricing.");
+        }
+      }
+    };
+
+    void calculatePricing();
+
+    return () => {
+      active = false;
+    };
+  }, [configuration]);
+
+  // =========================================
+  // UPDATE INDIVIDUAL PANEL COLOR
+  // =========================================
 
   const updatePanelColor = (panel: keyof PanelColors, color: string) => {
     setConfiguration((previous) => ({
@@ -221,9 +230,9 @@ function App() {
     setMessage("");
   };
 
-  /* -----------------------------------------
-     APPLY COLOR TO ALL PANELS
-  ----------------------------------------- */
+  // =========================================
+  // APPLY COLOR TO ALL PANELS
+  // =========================================
 
   const applyColorToAllPanels = (color: string) => {
     setConfiguration((previous) => ({
@@ -241,23 +250,23 @@ function App() {
     setMessage("Color applied to all panels.");
   };
 
-  /* -----------------------------------------
-     UPDATE ARTWORK
-  ----------------------------------------- */
+  // =========================================
+  // UPDATE ARTWORK
+  // =========================================
 
-  const updateArtwork = (newArtwork: ArtworkDesign) => {
+  const updateArtwork = (artwork: ArtworkDesign) => {
     setConfiguration((previous) => ({
       ...previous,
-      artwork: newArtwork,
+      artwork,
     }));
 
     setIsSaved(false);
     setMessage("");
   };
 
-  /* -----------------------------------------
-     UPDATE TENT SIZE
-  ----------------------------------------- */
+  // =========================================
+  // CHANGE TENT SIZE
+  // =========================================
 
   const updateTentSize = (size: string) => {
     setConfiguration((previous) => ({
@@ -269,75 +278,38 @@ function App() {
     setMessage("");
   };
 
-  /* -----------------------------------------
-     DYNAMIC PRICING
-  ----------------------------------------- */
-
-  useEffect(() => {
-    let active = true;
-
-    const calculatePrice = async () => {
-      try {
-        setPricingError("");
-
-        const result = await getTentPricing(configuration);
-
-        if (active) {
-          setPricing(result);
-        }
-      } catch (error) {
-        console.error("Pricing error:", error);
-
-        if (active) {
-          setPricing(null);
-          setPricingError(
-            "Unable to calculate pricing. Please check your configuration.",
-          );
-        }
-      }
-    };
-
-    calculatePrice();
-
-    return () => {
-      active = false;
-    };
-  }, [configuration]);
-
-  /* -----------------------------------------
-     CART VALUES
-  ----------------------------------------- */
-
-  const cartCount = cart.totalQuantity;
-
-  const cartTotal = cart.totalPrice;
-
-  /* -----------------------------------------
-     SAVE CONFIGURATION
-  ----------------------------------------- */
+  // =========================================
+  // SAVE CONFIGURATION
+  // =========================================
 
   const handleSaveConfiguration = () => {
-    const success = saveConfiguration(configuration);
+    try {
+      const success = saveConfiguration(configuration);
 
-    setIsSaved(success);
-
-    setMessage(
-      success
-        ? "Configuration saved successfully."
-        : "Unable to save. Browser storage may be full.",
-    );
+      if (success) {
+        setIsSaved(true);
+        setMessage("Your design has been saved.");
+      } else {
+        setIsSaved(false);
+        setMessage("Unable to save your design.");
+      }
+    } catch (error) {
+      console.error("Save failed:", error);
+      setIsSaved(false);
+      setMessage("Unable to save your design.");
+    }
   };
 
-  /* -----------------------------------------
-     LOAD SAVED CONFIGURATION
-  ----------------------------------------- */
+  // =========================================
+  // LOAD CONFIGURATION
+  // =========================================
 
   const handleLoadConfiguration = () => {
     try {
       const saved = loadConfiguration();
 
       if (!saved) {
-        setMessage("No saved configuration found.");
+        setMessage("No saved design was found.");
         return;
       }
 
@@ -355,42 +327,44 @@ function App() {
       });
 
       setIsSaved(true);
-      setMessage("Saved configuration loaded successfully.");
+      setMessage("Saved design loaded successfully.");
     } catch (error) {
-      console.error("Load error:", error);
-
-      setMessage("Unable to load saved configuration.");
+      console.error("Load failed:", error);
+      setMessage("Unable to load your saved design.");
     }
   };
 
-  /* -----------------------------------------
-     DOWNLOAD PDF
-  ----------------------------------------- */
+  // =========================================
+  // DOWNLOAD CONFIGURATION PDF WITH 3D IMAGE
+  // =========================================
 
   const handleDownloadPDF = () => {
     if (!pricing) {
-      setMessage("Please wait for pricing to finish calculating.");
+      setMessage("Pricing is not available yet.");
       return;
     }
 
     try {
-      generateConfigurationPDF(configuration, pricing);
+      const canvas = previewContainerRef.current?.querySelector("canvas");
 
-      setMessage("Configuration PDF downloaded successfully.");
+      const previewImage = canvas ? canvas.toDataURL("image/png") : null;
+
+      generateConfigurationPDF(configuration, pricing, previewImage);
+
+      setMessage("Configuration PDF generated successfully.");
     } catch (error) {
-      console.error("PDF error:", error);
-
-      setMessage("Unable to generate PDF.");
+      console.error("PDF generation failed:", error);
+      setMessage("Unable to generate the PDF.");
     }
   };
 
-  /* -----------------------------------------
-     ADD TO CART
-  ----------------------------------------- */
+  // =========================================
+  // ADD TO DEMO CART
+  // =========================================
 
   const handleAddToCart = async () => {
     if (!pricing) {
-      setMessage("Please wait for pricing to finish calculating.");
+      setMessage("Pricing is not available yet.");
       return;
     }
 
@@ -398,58 +372,55 @@ function App() {
     setMessage("");
 
     try {
-      const updatedCart = await addToShopifyCart(configuration, pricing);
+      const updatedCart = await addToShopifyCart(configuration, pricing, 1);
 
       setCart(updatedCart);
-
-      setMessage("Tent added to the demo cart successfully.");
+      setMessage("Tent added to the demo cart.");
     } catch (error) {
-      console.error("Cart error:", error);
+      console.error("Add to cart failed:", error);
 
       setMessage(
-        error instanceof Error ? error.message : "Unable to add tent to cart.",
+        error instanceof Error
+          ? error.message
+          : "Unable to add the tent to the cart.",
       );
     } finally {
       setIsAddingToCart(false);
     }
   };
 
-  /* -----------------------------------------
-     CLEAR CART
-  ----------------------------------------- */
+  // =========================================
+  // CLEAR DEMO CART
+  // =========================================
 
   const handleClearCart = () => {
     try {
       clearMockCart();
 
       setCart(EMPTY_CART);
-
-      setMessage("Cart cleared successfully.");
+      setMessage("Demo cart cleared.");
     } catch (error) {
-      console.error("Clear cart error:", error);
-
-      setMessage("Unable to clear cart.");
+      console.error("Unable to clear cart:", error);
+      setMessage("Unable to clear the cart.");
     }
   };
 
-  /* -----------------------------------------
-     ACTIVE PANEL COLOR
-  ----------------------------------------- */
-
+  // Selected panel color.
   const activePanelColor =
-    activeSection !== "artwork" ? panelColors[activeSection] : "#FFFFFF";
+    activeSection !== "artwork"
+      ? configuration.panelColors[activeSection]
+      : null;
 
-  /* -----------------------------------------
-     RENDER
-  ----------------------------------------- */
+  // =========================================
+  // RENDER
+  // =========================================
 
   return (
-    <div className="configurator">
+    <div className="app">
       {/* HEADER */}
-
-      <header className="header">
+      <header className="app-header">
         <div className="brand">
-          <div className="brand-icon">T</div>
+          <div className="brand-logo">T</div>
 
           <div>
             <h1>TENTIFY</h1>
@@ -461,31 +432,30 @@ function App() {
           <button
             type="button"
             className="secondary-button"
-            onClick={handleSaveConfiguration}
-          >
-            Save Design
-          </button>
-
-          <button
-            type="button"
-            className="secondary-button"
             onClick={handleLoadConfiguration}
           >
             Load Design
           </button>
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={handleSaveConfiguration}
+          >
+            Save Design
+          </button>
         </div>
       </header>
 
-      {/* STATUS MESSAGE */}
-
+      {/* MESSAGE */}
       {message && (
-        <div className="status-message" role="status">
+        <div className="app-message" role="status">
           {message}
 
           <button
             type="button"
+            aria-label="Dismiss message"
             onClick={() => setMessage("")}
-            aria-label="Close message"
           >
             ×
           </button>
@@ -493,314 +463,303 @@ function App() {
       )}
 
       {/* MAIN CONFIGURATOR */}
-
-      <main className="configurator-layout">
+      <main className="configurator">
         {/* LEFT SIDEBAR */}
-
         <aside className="sidebar">
           <div className="sidebar-heading">
             <h2>Customize Your Tent</h2>
             <p>Select a section to customize.</p>
           </div>
 
+          {/* SECTION SELECTOR */}
           <div className="section-list">
             {sections.map((section) => (
               <button
-                key={section.id}
                 type="button"
+                key={section.id}
                 className={`section-button ${
                   activeSection === section.id ? "active" : ""
                 }`}
                 onClick={() => setActiveSection(section.id)}
               >
-                <span>{section.name}</span>
-
-                {activeSection === section.id && (
-                  <span className="section-arrow">›</span>
-                )}
+                <span>{section.label}</span>
+                <span className="section-arrow">›</span>
               </button>
             ))}
           </div>
 
-          {/* COLOR CONTROLS */}
+          {/* COLOR CUSTOMIZATION */}
+          {activeSection !== "artwork" ? (
+            <div className="color-settings">
+              <h3>
+                {
+                  sections.find((section) => section.id === activeSection)
+                    ?.label
+                }
+              </h3>
 
-          {activeSection !== "artwork" && (
-            <div className="color-section">
-              <h3>Fabric Color</h3>
-
-              <p>
-                Choose a color for the{" "}
-                {sections
-                  .find((section) => section.id === activeSection)
-                  ?.name.toLowerCase()}
-                .
-              </p>
+              <p>Choose a fabric color.</p>
 
               <div className="color-grid">
                 {fabricColors.map((color) => (
                   <button
-                    key={color.value}
                     type="button"
-                    className={`color-swatch ${
+                    key={color.value}
+                    className={`color-option ${
                       activePanelColor === color.value ? "selected" : ""
                     }`}
                     onClick={() => updatePanelColor(activeSection, color.value)}
                     title={color.name}
-                    aria-label={`Select ${color.name}`}
+                    aria-label={`${color.name} color`}
                     aria-pressed={activePanelColor === color.value}
                   >
                     <span
-                      className="swatch-color"
+                      className="color-swatch"
                       style={{
                         backgroundColor: color.value,
                       }}
                     />
 
-                    <span className="swatch-name">{color.name}</span>
+                    <span className="color-name">{color.name}</span>
                   </button>
                 ))}
               </div>
 
+              <div className="selected-color">
+                <span>Selected color</span>
+                <strong>{activePanelColor?.toUpperCase()}</strong>
+              </div>
+
               <button
                 type="button"
-                className="secondary-button full-width"
-                onClick={() => applyColorToAllPanels(activePanelColor)}
+                className="secondary-button apply-all-button"
+                onClick={() =>
+                  applyColorToAllPanels(activePanelColor ?? "#FFFFFF")
+                }
               >
                 Apply to All Panels
               </button>
-
-              <div className="selected-color-info">
-                <span
-                  className="selected-color-preview"
-                  style={{
-                    backgroundColor: activePanelColor,
-                  }}
-                />
-
-                <div>
-                  <strong>Selected Color</strong>
-                  <small>{activePanelColor}</small>
-                </div>
-              </div>
             </div>
-          )}
-
-          {/* ARTWORK EDITOR */}
-
-          {activeSection === "artwork" && (
-            <ArtworkEditor design={artwork} onDesignChange={updateArtwork} />
+          ) : (
+            <ArtworkEditor
+              design={configuration.artwork}
+              onDesignChange={updateArtwork}
+            />
           )}
         </aside>
 
         {/* CENTER 3D PREVIEW */}
-
         <section className="preview-section">
           <div className="preview-heading">
             <div>
-              <h2>3D Preview</h2>
-              <p>Rotate, zoom and preview your custom tent.</p>
+              <h2>3D Live Preview</h2>
+              <p>Rotate and zoom to inspect your custom tent.</p>
             </div>
 
-            <span className="preview-status">Live Preview</span>
+            <span className="preview-status">
+              <span className="status-dot" />
+              Live Preview
+            </span>
           </div>
 
-          <div className="viewer-container">
-            <Viewer3D
-              modelPath={selectedTent.model}
-              panelColors={panelColors}
-              artwork={artwork}
-            />
-          </div>
-
-          <div className="preview-instructions">
-            <span>↻ Drag to rotate</span>
-            <span>＋ Scroll to zoom</span>
-            <span>⇧ Drag to move</span>
+          {/* PREVIEW CONTAINER WITH REF FOR PDF CAPTURE */}
+          <div className="preview-container" ref={previewContainerRef}>
+            <Suspense
+              fallback={
+                <div className="viewer-loading">Loading 3D tent...</div>
+              }
+            >
+              <Viewer3D
+                key={selectedTent.modelPath}
+                modelPath={selectedTent.modelPath}
+                panelColors={configuration.panelColors}
+                artwork={configuration.artwork}
+              />
+            </Suspense>
           </div>
 
           {/* PANEL COLOR SUMMARY */}
-
           <div className="panel-color-summary">
             <h3>Panel Colors</h3>
 
             <div className="panel-color-list">
               {(
-                Object.entries(panelColors) as [keyof PanelColors, string][]
+                Object.entries(configuration.panelColors) as [
+                  keyof PanelColors,
+                  string,
+                ][]
               ).map(([panel, color]) => (
                 <div className="panel-color-item" key={panel}>
                   <span
-                    className="panel-color-dot"
+                    className="mini-color-swatch"
                     style={{
                       backgroundColor: color,
                     }}
                   />
 
-                  <span>{panel.charAt(0).toUpperCase() + panel.slice(1)}</span>
-
-                  <strong>{color}</strong>
+                  <span className="panel-color-name">
+                    {panel.charAt(0).toUpperCase() + panel.slice(1)}
+                  </span>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        {/* RIGHT SUMMARY */}
-
-        <aside className="summary-section">
+        {/* RIGHT ORDER SUMMARY */}
+        <aside className="summary-sidebar">
           <div className="summary-card">
             <div className="summary-heading">
-              <h2>Configuration Summary</h2>
-              <p>Review your custom tent.</p>
+              <h2>Order Summary</h2>
+              <p>Your custom tent details.</p>
             </div>
 
+            {/* PRODUCT */}
             <div className="summary-product">
-              <div className="summary-product-icon">⛺</div>
+              <h3>{configuration.productName}</h3>
+              <span>{selectedTent.label}</span>
+            </div>
 
-              <div>
-                <h3>Custom Canopy Tent</h3>
-                <p>Premium promotional tent</p>
+            {/* PANEL COLORS */}
+            <div className="summary-details">
+              <div className="summary-row">
+                <span>Roof</span>
+                <span
+                  className="mini-color-swatch"
+                  style={{
+                    backgroundColor: configuration.panelColors.roof,
+                  }}
+                />
+              </div>
+
+              <div className="summary-row">
+                <span>Front Panel</span>
+                <span
+                  className="mini-color-swatch"
+                  style={{
+                    backgroundColor: configuration.panelColors.front,
+                  }}
+                />
+              </div>
+
+              <div className="summary-row">
+                <span>Back Panel</span>
+                <span
+                  className="mini-color-swatch"
+                  style={{
+                    backgroundColor: configuration.panelColors.back,
+                  }}
+                />
+              </div>
+
+              <div className="summary-row">
+                <span>Left Panel</span>
+                <span
+                  className="mini-color-swatch"
+                  style={{
+                    backgroundColor: configuration.panelColors.left,
+                  }}
+                />
+              </div>
+
+              <div className="summary-row">
+                <span>Right Panel</span>
+                <span
+                  className="mini-color-swatch"
+                  style={{
+                    backgroundColor: configuration.panelColors.right,
+                  }}
+                />
               </div>
             </div>
 
-            {/* SELECTED SIZE */}
-
-            <div className="summary-row">
-              <span>Tent Size</span>
-              <strong>{selectedTent.name}</strong>
-            </div>
-
-            <div className="summary-row">
-              <span>Product</span>
-              <strong>Custom Tent</strong>
-            </div>
-
-            <div className="summary-divider" />
-
-            <h3 className="summary-subheading">Fabric Colors</h3>
-
-            {(Object.entries(panelColors) as [keyof PanelColors, string][]).map(
-              ([panel, color]) => (
-                <div className="summary-row" key={panel}>
-                  <span>{panel.charAt(0).toUpperCase() + panel.slice(1)}</span>
-
-                  <div className="summary-color-value">
-                    <span
-                      className="summary-color-dot"
-                      style={{
-                        backgroundColor: color,
-                      }}
-                    />
-
-                    <strong>{color}</strong>
-                  </div>
-                </div>
-              ),
-            )}
-
-            <div className="summary-divider" />
-
             {/* ARTWORK SUMMARY */}
+            <div className="summary-artwork">
+              <h3>Artwork</h3>
 
-            <h3 className="summary-subheading">Artwork</h3>
+              <p>
+                Logo: {configuration.artwork.logo ? "Uploaded" : "Not added"}
+              </p>
 
-            <div className="summary-row">
-              <span>Logo</span>
-              <strong>{artwork.logo ? "Uploaded" : "Not added"}</strong>
+              <p>
+                Brand text: {configuration.artwork.text.trim() || "Not added"}
+              </p>
             </div>
 
-            <div className="summary-row">
-              <span>Brand Text</span>
-              <strong>{artwork.text.trim() || "Not added"}</strong>
+            {/* PRICE BREAKDOWN */}
+            <div className="price-breakdown">
+              <h3>Price Breakdown</h3>
+
+              {pricingError ? (
+                <p className="pricing-error">{pricingError}</p>
+              ) : pricing ? (
+                <>
+                  <div className="summary-row">
+                    <span>Base Price</span>
+                    <strong>{formatPrice(pricing.basePrice)}</strong>
+                  </div>
+
+                  <div className="summary-row">
+                    <span>Panel Customization</span>
+                    <strong>{formatPrice(pricing.panelCustomization)}</strong>
+                  </div>
+
+                  <div className="summary-row">
+                    <span>Logo Printing</span>
+                    <strong>{formatPrice(pricing.logoPrinting)}</strong>
+                  </div>
+
+                  <div className="summary-row">
+                    <span>Text Printing</span>
+                    <strong>{formatPrice(pricing.textPrinting)}</strong>
+                  </div>
+
+                  <div className="summary-total">
+                    <span>Total</span>
+                    <strong>{formatPrice(pricing.total)}</strong>
+                  </div>
+                </>
+              ) : (
+                <p>Calculating price...</p>
+              )}
             </div>
 
-            <div className="summary-divider" />
-
-            {/* PRICING */}
-
-            <h3 className="summary-subheading">Price Breakdown</h3>
-
-            {pricingError ? (
-              <p className="pricing-error">{pricingError}</p>
-            ) : pricing ? (
-              <>
-                <div className="summary-row">
-                  <span>Base Price</span>
-
-                  <strong>₹{pricing.basePrice.toLocaleString("en-IN")}</strong>
-                </div>
-
-                <div className="summary-row">
-                  <span>Panel Customization</span>
-
-                  <strong>
-                    ₹{pricing.panelCustomization.toLocaleString("en-IN")}
-                  </strong>
-                </div>
-
-                <div className="summary-row">
-                  <span>Logo Printing</span>
-
-                  <strong>
-                    ₹{pricing.logoPrinting.toLocaleString("en-IN")}
-                  </strong>
-                </div>
-
-                <div className="summary-row">
-                  <span>Text Printing</span>
-
-                  <strong>
-                    ₹{pricing.textPrinting.toLocaleString("en-IN")}
-                  </strong>
-                </div>
-
-                <div className="summary-divider" />
-
-                <div className="summary-total">
-                  <span>Total Price</span>
-
-                  <strong>₹{pricing.total.toLocaleString("en-IN")}</strong>
-                </div>
-              </>
-            ) : (
-              <p className="pricing-loading">Calculating price...</p>
-            )}
-
-            {/* ACTIONS */}
-
+            {/* ADD TO CART */}
             <button
               type="button"
-              className="primary-button full-width"
+              className="primary-button add-cart-button"
               onClick={handleAddToCart}
               disabled={!pricing || isAddingToCart}
             >
               {isAddingToCart ? "Adding..." : "Add to Cart"}
             </button>
 
+            {/* PDF DOWNLOAD */}
             <button
               type="button"
-              className="secondary-button full-width"
+              className="secondary-button pdf-button"
               onClick={handleDownloadPDF}
               disabled={!pricing}
             >
-              Download PDF
+              Download Configuration PDF
             </button>
 
-            <div className="summary-save-status">
-              {isSaved ? "✓ Configuration saved" : "Configuration not saved"}
-            </div>
+            {isSaved && (
+              <p className="saved-indicator">
+                <span>✓</span> Design saved
+              </p>
+            )}
           </div>
 
-          {/* SHOPPING CART */}
-
+          {/* DEMO CART */}
           <div className="cart-card">
             <div className="cart-heading">
-              <h2>Shopping Cart</h2>
-
-              <span className="cart-count">{cartCount}</span>
+              <h3>Demo Cart</h3>
+              <span>{cart.totalQuantity} items</span>
             </div>
 
             {cart.items.length === 0 ? (
-              <p className="empty-cart">Your cart is currently empty.</p>
+              <p className="empty-cart">Your cart is empty.</p>
             ) : (
               <>
                 <div className="cart-items">
@@ -809,25 +768,24 @@ function App() {
                       <div>
                         <strong>{item.productTitle}</strong>
 
-                        <p>Size: {item.configuration.size}</p>
-
-                        <p>Quantity: {item.quantity}</p>
+                        <span>
+                          {item.configuration.size} · Qty {item.quantity}
+                        </span>
                       </div>
 
-                      <strong>₹{item.price.toLocaleString("en-IN")}</strong>
+                      <strong>{formatPrice(item.price)}</strong>
                     </div>
                   ))}
                 </div>
 
                 <div className="cart-total">
                   <span>Cart Total</span>
-
-                  <strong>₹{cartTotal.toLocaleString("en-IN")}</strong>
+                  <strong>{formatPrice(cart.totalPrice)}</strong>
                 </div>
 
                 <button
                   type="button"
-                  className="secondary-button full-width"
+                  className="text-button clear-cart-button"
                   onClick={handleClearCart}
                 >
                   Clear Cart
@@ -836,52 +794,42 @@ function App() {
             )}
 
             <p className="cart-disclaimer">
-              Demo cart only. No real Shopify checkout is connected.
+              Demo cart only. This is not a live Shopify checkout.
             </p>
           </div>
         </aside>
       </main>
 
       {/* TENT SIZE SELECTOR */}
-
-      <section className="tent-size-section">
+      <section className="size-selector">
         <div>
-          <h2>Choose Tent Size</h2>
-
-          <p>Select the size that suits your requirements.</p>
+          <h2>Select Tent Size</h2>
+          <p>Choose the size that fits your requirements.</p>
         </div>
 
-        <div className="tent-size-options">
+        <div className="size-options">
           {tentSizes.map((tent) => (
             <button
-              key={tent.id}
               type="button"
-              className={`tent-size-option ${
-                configuration.size === tent.id ? "active" : ""
+              key={tent.size}
+              className={`size-option ${
+                configuration.size === tent.size ? "active" : ""
               }`}
-              onClick={() => updateTentSize(tent.id)}
-              aria-pressed={configuration.size === tent.id}
+              onClick={() => updateTentSize(tent.size)}
+              aria-pressed={configuration.size === tent.size}
             >
-              <span className="tent-size-icon">⛺</span>
-
-              <strong>{tent.name}</strong>
-
-              <small>
-                {tent.id === "5x5"
-                  ? "Compact"
-                  : tent.id === "6.5x6.5"
-                    ? "Medium"
-                    : "Large"}
-              </small>
+              {tent.label}
             </button>
           ))}
         </div>
       </section>
 
       {/* FOOTER */}
-
-      <footer className="footer">
-        <p>© {new Date().getFullYear()} TENTIFY. Custom Tent Configurator.</p>
+      <footer className="app-footer">
+        <p>
+          TENTIFY Custom Tent Configurator · Interactive product customization
+          demo
+        </p>
       </footer>
     </div>
   );
